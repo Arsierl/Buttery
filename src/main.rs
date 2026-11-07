@@ -173,7 +173,6 @@ slint::slint! {
         in property <bool> has-mouse;
         in-out property <bool> natural;
         in-out property <bool> smooth;
-        in-out property <bool> busy;
         callback toggle-natural(bool);
         callback toggle-smooth(bool);
 
@@ -183,38 +182,38 @@ slint::slint! {
             Row {
                 label: natural-label;
                 checked <=> root.natural;
-                active: has-mouse && !busy;
+                active: has-mouse;
                 toggled(on) => { root.toggle-natural(on); }
             }
             Row {
                 label: smooth-label;
                 checked <=> root.smooth;
-                active: !busy;
                 toggled(on) => { root.toggle-smooth(on); }
             }
         }
     }
 }
 
+type Job = Box<dyn FnOnce() + Send>;
+
 fn background(
     weak: &slint::Weak<App>,
     work: impl FnOnce() -> bool + Send + 'static,
     revert: impl FnOnce(&App) + Send + 'static,
 ) {
-    weak.unwrap().set_busy(true);
+    static QUEUE: std::sync::OnceLock<std::sync::mpsc::Sender<Job>> = std::sync::OnceLock::new();
+    let queue = QUEUE.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Job>();
+        std::thread::spawn(move || rx.into_iter().for_each(|job| job()));
+        tx
+    });
     let weak = weak.clone();
-    std::thread::spawn(move || {
-        let ok = work();
-        let _ = weak.upgrade_in_event_loop(move |app| {
-            if !ok {
-                revert(&app);
-            }
-            app.set_busy(false);
-        });
-        if !ok {
+    let _ = queue.send(Box::new(move || {
+        if !work() {
+            let _ = weak.upgrade_in_event_loop(move |app| revert(&app));
             msgbox(t("操作失败", "Failed"), MB_ICONERROR);
         }
-    });
+    }));
 }
 
 fn main() {

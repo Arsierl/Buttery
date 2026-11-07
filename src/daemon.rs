@@ -1,6 +1,3 @@
-//! 第二档：常驻托盘的平滑滚动。
-//! 用低级鼠标钩子拦下真实滚轮，交给动画线程拆成小步，再用 SendInput 发出去。
-
 use crate::smooth::Axis;
 use crate::{t, w};
 use std::os::windows::process::CommandExt;
@@ -22,7 +19,6 @@ const CLASS: &str = "NaturalScrollSmooth";
 const NO_WINDOW: u32 = 0x0800_0000;
 const TRAY_MSG: u32 = WM_APP + 1;
 const MENU_OFF: usize = 1;
-/// DwmFlush 不可用时的帧间隔兜底（约 60Hz）
 const FRAME: Duration = Duration::from_millis(16);
 
 static AXES: Mutex<[Axis; 2]> = Mutex::new([Axis::new(), Axis::new()]);
@@ -30,8 +26,6 @@ static WAKE: Condvar = Condvar::new();
 static START: OnceLock<Instant> = OnceLock::new();
 static FULLSCREEN: AtomicBool = AtomicBool::new(false);
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
-
-// ---------- 开机启动（计划任务） ----------
 
 pub fn is_enabled() -> bool {
     schtasks(&["/query", "/tn", TASK])
@@ -49,7 +43,6 @@ pub fn enable() -> bool {
             .replace('<', "&lt;")
             .replace('>', "&gt;")
     };
-    // 用 XML 是为了改掉三个默认值：72 小时后被杀、用电池时不启动、拔电源时被停
     let xml = format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -109,13 +102,11 @@ fn schtasks(args: &[&str]) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
-// ---------- 常驻进程 ----------
-
 pub fn run() {
     let class = w(CLASS);
     unsafe {
         if !FindWindowW(class.as_ptr(), null_mut()).is_null() {
-            return; // 已经在运行
+            return;
         }
         SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
         START.get_or_init(Instant::now);
@@ -143,7 +134,6 @@ pub fn run() {
             null_mut(),
         );
 
-        // 本进程是管理员权限，要显式允许 Explorer（普通权限）发来的托盘消息
         let tc = RegisterWindowMessageW(w("TaskbarCreated").as_ptr());
         TASKBAR_CREATED.store(tc, Ordering::Relaxed);
         for m in [tc, TRAY_MSG] {
@@ -168,7 +158,6 @@ unsafe extern "system" fn hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
         let wheel = wp == WM_MOUSEWHEEL as usize || wp == WM_MOUSEHWHEEL as usize;
         if code == HC_ACTION as i32 && wheel {
             let info = &*(lp as *const MSLLHOOKSTRUCT);
-            // 放行：程序注入的事件（包括我们自己发的）、全屏游戏、按住 Ctrl/Alt（缩放等快捷操作）
             if info.flags & LLMHF_INJECTED == 0
                 && !FULLSCREEN.load(Ordering::Relaxed)
                 && !modifier_down()
@@ -177,7 +166,7 @@ unsafe extern "system" fn hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                 let now = START.get().unwrap().elapsed().as_secs_f64();
                 AXES.lock().unwrap()[(wp == WM_MOUSEHWHEEL as usize) as usize].push(delta, now);
                 WAKE.notify_one();
-                return 1; // 吞掉原始事件
+                return 1;
             }
         }
         CallNextHookEx(null_mut(), code, wp, lp)
@@ -188,7 +177,6 @@ fn modifier_down() -> bool {
     unsafe { GetAsyncKeyState(VK_CONTROL as i32) < 0 || GetAsyncKeyState(VK_MENU as i32) < 0 }
 }
 
-/// 动画线程：没有滚动时在条件变量上睡着，不占 CPU。
 fn animate() {
     loop {
         let mut g = AXES.lock().unwrap();
@@ -198,18 +186,15 @@ fn animate() {
         drop(g);
         let mut last = Instant::now();
         loop {
-            // 跟屏幕刷新对齐：每次画面合成只发一次，不然每帧移动量忽大忽小，看起来一顿一顿
             if unsafe { DwmFlush() } < 0 || last.elapsed() < Duration::from_millis(2) {
                 std::thread::sleep(FRAME);
             }
             let now = Instant::now();
             let dt = (now - last).as_secs_f64();
             last = now;
-            // 发送时不能持锁：SendInput 会经过钩子线程，持锁可能互相等待
             let (v, h, active) = {
                 let mut g = AXES.lock().unwrap();
                 if modifier_down() {
-                    // 动画途中按下 Ctrl，剩下的惯性不能变成缩放
                     g.iter_mut().for_each(Axis::stop);
                 }
                 (g[0].tick(dt), g[1].tick(dt), g.iter().any(Axis::active))
@@ -251,8 +236,6 @@ fn send(v: i32, h: i32) {
     }
 }
 
-/// 全屏检测用 Explorer 自己的判断（和"游戏时免打扰"同一套），每秒查一次，钩子里只读结果。
-// ponytail: 只靠系统的全屏判断；有漏判的游戏时再加手动排除列表
 fn query_fullscreen() -> bool {
     let mut s = 0;
     unsafe {
@@ -273,13 +256,7 @@ unsafe fn tray(hwnd: HWND, op: NOTIFY_ICON_MESSAGE) {
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = TRAY_MSG;
         nid.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
-        let tip: Vec<u16> = t(
-            "Natural Scroll：平滑滚动已开启",
-            "Natural Scroll: smooth scrolling on",
-        )
-        .encode_utf16()
-        .take(127)
-        .collect();
+        let tip: Vec<u16> = "Natural Scroll".encode_utf16().take(127).collect();
         nid.szTip[..tip.len()].copy_from_slice(&tip);
         Shell_NotifyIconW(op, &nid);
     }
@@ -299,7 +276,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 );
                 let mut pt = std::mem::zeroed();
                 GetCursorPos(&mut pt);
-                SetForegroundWindow(hwnd); // 不加这句，点菜单外面时菜单不会消失
+                SetForegroundWindow(hwnd);
                 let cmd = TrackPopupMenu(
                     menu,
                     TPM_RETURNCMD | TPM_NONOTIFY,
@@ -322,7 +299,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 tray(hwnd, NIM_DELETE);
                 PostQuitMessage(0);
             }
-            // Explorer 重启后托盘会清空，要重新加图标
             m if m == TASKBAR_CREATED.load(Ordering::Relaxed) && m != 0 => tray(hwnd, NIM_ADD),
             _ => return DefWindowProcW(hwnd, msg, wp, lp),
         }

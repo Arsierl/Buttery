@@ -1,15 +1,6 @@
-//! 平滑滚动的纯计算部分，不依赖 Windows，可以在 Mac 上直接跑测试：
-//! rustc --edition 2021 --test src/smooth.rs -o /tmp/smooth_test && /tmp/smooth_test
-
-// 下面几个是手感参数，按实际体验调。
-/// 剩余距离每过 TAU 秒衰减到约 37%。越大惯性越长、越"滑"。
 pub const TAU: f64 = 0.08;
-/// 收尾的最低速度（单位/秒，120 = 一格）。速度降到这里后匀速走完，
-/// 不再越走越慢地蹭。越大收尾越干脆。
 pub const MIN_SPEED: f64 = 300.0;
-/// 两格之间的间隔小于这个值，算作连续快速滚动，开始加速。
 pub const STREAK_WINDOW: f64 = 0.08;
-/// 连续快速滚动时，每多一格放大多少倍，最多放大到 MAX_GAIN。
 pub const ACCEL: f64 = 0.15;
 pub const MAX_GAIN: f64 = 3.0;
 
@@ -30,11 +21,9 @@ impl Axis {
         }
     }
 
-    /// 收到一格真实滚轮。delta 为 ±120 或高精度滚轮的小值，now 单位为秒。
     pub fn push(&mut self, delta: i32, now: f64) {
         let d = delta as f64;
         if self.remaining * d < 0.0 {
-            // 反向滚动：立刻丢掉剩下的惯性
             self.stop();
         } else if now - self.last < STREAK_WINDOW {
             self.gain = (self.gain + ACCEL).min(MAX_GAIN);
@@ -55,7 +44,6 @@ impl Axis {
         self.remaining != 0.0
     }
 
-    /// 时间前进 dt 秒，返回这一帧应该发出的整数滚动量。
     pub fn tick(&mut self, dt: f64) -> i32 {
         let mut step = self.remaining * (1.0 - (-dt / TAU).exp());
         let min = MIN_SPEED * dt;
@@ -63,7 +51,7 @@ impl Axis {
             step = min.copysign(self.remaining);
         }
         if step.abs() >= self.remaining.abs() {
-            step = self.remaining; // 走完了
+            step = self.remaining;
         }
         self.remaining -= step;
         self.carry += step;
@@ -116,7 +104,6 @@ mod tests {
 
     #[test]
     fn single_notch_settles_quickly() {
-        // 收尾不能拖：一格滚轮要在 0.3 秒内走完
         let mut a = Axis::new();
         a.push(120, 0.0);
         let mut frames = 0;

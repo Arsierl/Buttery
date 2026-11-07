@@ -14,8 +14,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Shell::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-const TASK: &str = "NaturalScroll";
-const CLASS: &str = "NaturalScrollSmooth";
+const TASK: &str = "Buttery";
+const CLASS: &str = "ButterySmooth";
 const NO_WINDOW: u32 = 0x0800_0000;
 const TRAY_MSG: u32 = WM_APP + 1;
 const MENU_OFF: usize = 1;
@@ -59,7 +59,7 @@ pub fn enable() -> bool {
         u = esc(&user),
         e = esc(&exe)
     );
-    let path = std::env::temp_dir().join("natural-scroll-task.xml");
+    let path = std::env::temp_dir().join("buttery-task.xml");
     let bytes: Vec<u8> = std::iter::once(0xFEFF)
         .chain(xml.encode_utf16())
         .flat_map(u16::to_le_bytes)
@@ -256,7 +256,7 @@ unsafe fn tray(hwnd: HWND, op: NOTIFY_ICON_MESSAGE) {
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = TRAY_MSG;
         nid.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
-        let tip: Vec<u16> = "Natural Scroll".encode_utf16().take(127).collect();
+        let tip: Vec<u16> = "Buttery".encode_utf16().take(127).collect();
         nid.szTip[..tip.len()].copy_from_slice(&tip);
         Shell_NotifyIconW(op, &nid);
     }

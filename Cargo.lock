@@ -405,6 +405,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "buttery"
+version = "0.1.0"
+dependencies = [
+ "slint",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "by_address"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2483,14 +2491,6 @@ dependencies = [
  "indexmap",
  "rustc-hash 1.1.0",
  "thiserror 2.0.21",
-]
-
-[[package]]
-name = "natural-scroll"
-version = "0.1.0"
-dependencies = [
- "slint",
- "windows-sys 0.59.0",
 ]
 
 [[package]]

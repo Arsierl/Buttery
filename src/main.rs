@@ -115,7 +115,7 @@ pub fn t(zh: &'static str, en: &'static str) -> &'static str {
 }
 
 fn msgbox(text: &str, flags: MESSAGEBOX_STYLE) {
-    let (t, c) = (w(text), w("Natural Scroll"));
+    let (t, c) = (w(text), w("Buttery"));
     unsafe { MessageBoxW(null_mut(), t.as_ptr(), c.as_ptr(), flags) };
 }
 
@@ -166,7 +166,7 @@ slint::slint! {
     }
 
     export component App inherits Window {
-        title: "Natural Scroll";
+        title: "Buttery";
         min-width: 340px;
         in property <string> natural-label;
         in property <string> smooth-label;

@@ -1,0 +1,6 @@
+[build]
+target = "x86_64-pc-windows-msvc"
+
+[target.x86_64-pc-windows-msvc]
+# 内嵌 UAC 清单：双击就弹管理员授权
+rustflags = ["-C", "link-arg=/MANIFEST:EMBED", "-C", "link-arg=/MANIFESTUAC:level='requireAdministrator'", "-C", "target-feature=+crt-static"]

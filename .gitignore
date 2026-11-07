@@ -1,0 +1,10 @@
+# 编译产物
+/target
+
+# macOS 元数据（外接盘上还会生成 ._ 开头的文件）
+.DS_Store
+._*
+
+# 编辑器
+.idea/
+.vscode/

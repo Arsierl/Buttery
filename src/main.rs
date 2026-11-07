@@ -6,7 +6,6 @@ use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
 use windows_sys::Win32::System::Registry::*;
-use windows_sys::Win32::UI::Controls::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 mod daemon;
@@ -132,88 +131,90 @@ fn direction() -> Option<bool> {
     found.then_some(natural)
 }
 
-fn set_direction(natural: bool) {
+fn set_direction(natural: bool) -> bool {
     let v = natural as u32;
-    let (mut ok, mut failed) = (0, 0);
+    let mut ok = true;
     for (id, k) in mice(true) {
         if write_dword(k, "FlipFlopWheel", v) && write_dword(k, "FlipFlopHScroll", v) {
-            ok += 1;
             let _ = Command::new("pnputil")
                 .args(["/restart-device", &id])
                 .creation_flags(0x0800_0000)
                 .status();
         } else {
-            failed += 1;
+            ok = false;
         }
         unsafe { RegCloseKey(k) };
     }
-    if failed == 0 {
-        let msg = format!("{} {ok}", t("已更新鼠标：", "Mice updated:"));
-        msgbox(&msg, MB_ICONINFORMATION);
-    } else {
-        let msg = format!(
-            "{} {ok} / {failed}",
-            t("成功 / 失败：", "Succeeded / failed:")
-        );
-        msgbox(&msg, MB_ICONERROR);
+    ok
+}
+
+slint::slint! {
+    import { Switch } from "std-widgets.slint";
+
+    component Row inherits HorizontalLayout {
+        in property <string> label;
+        in-out property <bool> checked;
+        in property <bool> active: true;
+        callback toggled(bool);
+        alignment: space-between;
+        Text { text: label; vertical-alignment: center; font-size: 14px; }
+        Switch {
+            checked <=> root.checked;
+            enabled: root.active;
+            toggled => { root.toggled(self.checked); }
+        }
+    }
+
+    export component App inherits Window {
+        title: "Natural Scroll";
+        min-width: 340px;
+        in property <string> natural-label;
+        in property <string> smooth-label;
+        in property <bool> has-mouse;
+        in-out property <bool> natural;
+        in-out property <bool> smooth;
+        in-out property <bool> busy;
+        callback toggle-natural(bool);
+        callback toggle-smooth(bool);
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 18px;
+            Row {
+                label: natural-label;
+                checked <=> root.natural;
+                active: has-mouse && !busy;
+                toggled(on) => { root.toggle-natural(on); }
+            }
+            Row {
+                label: smooth-label;
+                checked <=> root.smooth;
+                active: !busy;
+                toggled(on) => { root.toggle-smooth(on); }
+            }
+        }
     }
 }
 
-const BTN_DIRECTION: i32 = 101;
-const BTN_SMOOTH: i32 = 102;
-
-fn dialog(dir: Option<bool>, smooth: bool) -> i32 {
-    let status = format!(
-        "{}{}\n{}{}",
-        t("滚动方向：", "Direction: "),
-        match dir {
-            Some(true) => t("自然滚动（Mac）", "Natural (Mac)"),
-            Some(false) => t("Windows 默认", "Windows default"),
-            None => t("未找到鼠标", "No mouse found"),
-        },
-        t("平滑滚动：", "Smooth scrolling: "),
-        if smooth {
-            t("开启", "On")
-        } else {
-            t("关闭", "Off")
-        },
-    );
-    let dir_text = if dir == Some(true) {
-        t("恢复默认方向", "Restore default direction")
-    } else {
-        t("自然滚动", "Natural scrolling")
-    };
-    let smooth_text = if smooth {
-        t("关闭平滑滚动", "Turn off smooth scrolling")
-    } else {
-        t("开启平滑滚动", "Turn on smooth scrolling")
-    };
-    let (title, status, dir_text, smooth_text) =
-        (w("Natural Scroll"), w(&status), w(dir_text), w(smooth_text));
-    let mut buttons = vec![TASKDIALOG_BUTTON {
-        nButtonID: BTN_SMOOTH,
-        pszButtonText: smooth_text.as_ptr(),
-    }];
-    if dir.is_some() {
-        buttons.insert(
-            0,
-            TASKDIALOG_BUTTON {
-                nButtonID: BTN_DIRECTION,
-                pszButtonText: dir_text.as_ptr(),
-            },
-        );
-    }
-    let mut cfg: TASKDIALOGCONFIG = unsafe { std::mem::zeroed() };
-    cfg.cbSize = std::mem::size_of::<TASKDIALOGCONFIG>() as u32;
-    cfg.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION;
-    cfg.dwCommonButtons = TDCBF_CLOSE_BUTTON;
-    cfg.pszWindowTitle = title.as_ptr();
-    cfg.pszContent = status.as_ptr();
-    cfg.cButtons = buttons.len() as u32;
-    cfg.pButtons = buttons.as_ptr();
-    let mut clicked = 0;
-    unsafe { TaskDialogIndirect(&cfg, &mut clicked, null_mut(), null_mut()) };
-    clicked
+fn background(
+    weak: &slint::Weak<App>,
+    work: impl FnOnce() -> bool + Send + 'static,
+    revert: impl FnOnce(&App) + Send + 'static,
+) {
+    weak.unwrap().set_busy(true);
+    let weak = weak.clone();
+    std::thread::spawn(move || {
+        let ok = work();
+        let _ = weak.upgrade_in_event_loop(move |app| {
+            if !ok {
+                revert(&app);
+            }
+            app.set_busy(false);
+        });
+        if !ok {
+            msgbox(t("操作失败", "Failed"), MB_ICONERROR);
+        }
+    });
 }
 
 fn main() {
@@ -225,15 +226,36 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("--smooth") {
         return daemon::run();
     }
-    loop {
-        let dir = direction();
-        let smooth = daemon::is_enabled();
-        match dialog(dir, smooth) {
-            BTN_DIRECTION => set_direction(dir != Some(true)),
-            BTN_SMOOTH if smooth => daemon::disable(),
-            BTN_SMOOTH if !daemon::enable() => msgbox(t("开启失败", "Failed"), MB_ICONERROR),
-            BTN_SMOOTH => {}
-            _ => return,
-        }
-    }
+    let app = App::new().unwrap();
+    let dir = direction();
+    app.set_natural_label(t("自然滚动", "Natural scrolling").into());
+    app.set_smooth_label(t("平滑滚动", "Smooth scrolling").into());
+    app.set_has_mouse(dir.is_some());
+    app.set_natural(dir == Some(true));
+    app.set_smooth(daemon::is_enabled());
+
+    let weak = app.as_weak();
+    app.on_toggle_natural(move |on| {
+        background(
+            &weak,
+            move || set_direction(on),
+            move |app| app.set_natural(!on),
+        )
+    });
+    let weak = app.as_weak();
+    app.on_toggle_smooth(move |on| {
+        background(
+            &weak,
+            move || {
+                if on {
+                    daemon::enable()
+                } else {
+                    daemon::disable();
+                    true
+                }
+            },
+            |app| app.set_smooth(false),
+        )
+    });
+    app.run().unwrap();
 }

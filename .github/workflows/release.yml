@@ -1,0 +1,34 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: 检查版本号
+        shell: bash
+        run: |
+          v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "Cargo.toml 版本 $v 和标签 $GITHUB_REF_NAME 对不上"
+            exit 1
+          fi
+      - run: cargo test --release
+      - run: cargo build --release
+      - name: 发布
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            target/x86_64-pc-windows-msvc/release/buttery.exe \
+            --title "Buttery $GITHUB_REF_NAME" \
+            --generate-notes

@@ -38,27 +38,7 @@ pub fn enable() -> bool {
         std::env::var("USERDOMAIN").unwrap_or_default(),
         std::env::var("USERNAME").unwrap_or_default()
     );
-    let esc = |s: &str| {
-        s.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    };
-    let xml = format!(
-        r#"<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <Triggers><LogonTrigger><UserId>{u}</UserId></LogonTrigger></Triggers>
-  <Principals><Principal id="Author"><UserId>{u}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-  </Settings>
-  <Actions Context="Author"><Exec><Command>{e}</Command><Arguments>--smooth</Arguments></Exec></Actions>
-</Task>"#,
-        u = esc(&user),
-        e = esc(&exe)
-    );
+    let xml = task_xml(&user, &exe);
     let path = std::env::temp_dir().join("buttery-task.xml");
     let bytes: Vec<u8> = std::iter::once(0xFEFF)
         .chain(xml.encode_utf16())
@@ -92,6 +72,34 @@ pub fn disable() {
     if !hwnd.is_null() {
         unsafe { PostMessageW(hwnd, WM_CLOSE, 0, 0) };
     }
+}
+
+fn task_xml(user: &str, exe: &str) -> String {
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    };
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><LogonTrigger><UserId>{u}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>{u}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>{e}</Command><Arguments>--smooth</Arguments></Exec></Actions>
+</Task>"#,
+        u = esc(user),
+        e = esc(exe)
+    )
+}
+
+fn wheel_delta(mouse_data: u32) -> i32 {
+    (mouse_data >> 16) as i16 as i32
 }
 
 fn schtasks(args: &[&str]) -> bool {
@@ -162,7 +170,7 @@ unsafe extern "system" fn hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                 && !FULLSCREEN.load(Ordering::Relaxed)
                 && !modifier_down()
             {
-                let delta = (info.mouseData >> 16) as i16 as i32;
+                let delta = wheel_delta(info.mouseData);
                 let now = START.get().unwrap().elapsed().as_secs_f64();
                 AXES.lock().unwrap()[(wp == WM_MOUSEHWHEEL as usize) as usize].push(delta, now);
                 WAKE.notify_one();
@@ -303,5 +311,27 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             _ => return DefWindowProcW(hwnd, msg, wp, lp),
         }
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wheel_delta_keeps_sign() {
+        assert_eq!(wheel_delta(120 << 16), 120);
+        assert_eq!(wheel_delta(((-120i16) as u16 as u32) << 16), -120);
+        assert_eq!(wheel_delta((15 << 16) | 0xFFFF), 15);
+    }
+
+    #[test]
+    fn task_xml_escapes_and_runs_smooth() {
+        let xml = task_xml(r"PC\me", r"C:\Tools & <x>\buttery.exe");
+        assert!(xml.contains(r"<Command>C:\Tools &amp; &lt;x&gt;\buttery.exe</Command>"));
+        assert!(xml.contains(r"<UserId>PC\me</UserId>"));
+        assert!(xml.contains("<Arguments>--smooth</Arguments>"));
+        assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+        assert!(xml.contains("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>"));
     }
 }
